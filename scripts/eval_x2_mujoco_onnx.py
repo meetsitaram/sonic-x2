@@ -477,6 +477,21 @@ def main():
 
     _apply_init_state()
 
+    # Per-episode tracking-error accumulator vs the reference clip (joint
+    # MAE in rad, max joint error, pelvis-z MAE in m). Reset each episode;
+    # printed at every episode end.
+    _ref_clip = motion_data[list(motion_data.keys())[0]]
+    _track = {"jmae": 0.0, "jmax": 0.0, "zmae": 0.0, "n": 0}
+
+    def _track_reset():
+        _track.update(jmae=0.0, jmax=0.0, zmae=0.0, n=0)
+
+    def _track_summary() -> str:
+        n = max(_track["n"], 1)
+        return (f"joint MAE {_track['jmae'] / n:.4f} rad "
+                f"(max {_track['jmax']:.3f}) | pelvis-z MAE "
+                f"{_track['zmae'] / n:.3f} m")
+
     # Tracks the reference index so we can catch the loop wrap. Sonic is a tracking
     # policy: it can neither hold a frozen frame nor chase a teleport. Letting the
     # reference index wrap on its own snaps it back to frame 0 -- metres behind the
@@ -487,6 +502,9 @@ def main():
     def reset_state(reason: str = "") -> None:
         nonlocal sim_time, last_action_mj, episode_count, episode_start_step
         nonlocal prev_motion_frame
+        if _track["n"]:
+            print(f"  [tracking] {_track_summary()}", flush=True)
+        _track_reset()
         prev_motion_frame = -1
         sim_time = float(init_frame) / motion_fps
         last_action_mj[:] = 0
@@ -566,6 +584,13 @@ def main():
         step_count += 1
 
         pelvis_z = float(mj_data.qpos[2])
+        _err = np.abs(mj_data.qpos[7:7 + NUM_DOFS]
+                      - np.asarray(_ref_clip["dof"][motion_frame]))
+        _track["jmae"] += float(_err.mean())
+        _track["jmax"] = max(_track["jmax"], float(_err.max()))
+        _track["zmae"] += abs(pelvis_z
+                              - float(_ref_clip["root_trans_offset"][motion_frame][2]))
+        _track["n"] += 1
         grav_z = float(gravity[2])
         episode_seconds = (step_count - episode_start_step) * CONTROL_DT
         if pelvis_z < args.fall_height:
@@ -633,9 +658,11 @@ def main():
             if reason is not None:
                 print(
                     f"  [end] ep={episode_count} ran "
-                    f"{(step_count - episode_start_step) * CONTROL_DT:.2f}s, reason: {reason}",
+                    f"{(step_count - episode_start_step) * CONTROL_DT:.2f}s, "
+                    f"reason: {reason} | {_track_summary()}",
                     flush=True,
                 )
+                _track_reset()
                 if headless_exit_after_one_episode:
                     exit_requested = True
                 else:
