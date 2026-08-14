@@ -12,12 +12,8 @@ AgiBot's docs (Get the SDK / Robot Specifications pages):
     https://x2-aimdk.agibot.com/en/latest/get_sdk/index.html
     https://x2-aimdk.agibot.com/en/latest/about_agibot_X2/robot_specifications.html
 
-`install_scripts/setup_x2.sh` downloads and places them here automatically
+`./install.sh` downloads and places them here automatically
 (`X2_URDF_URL` to override). Manual fallback:
 
     unzip X2_URDF-v1.3.0.zip && cp X2_URDF-v1.3.0/meshes/*.STL \
-        gear_sonic/data/assets/robot_description/urdf/x2_ultra/meshes/
-
-The URDFs in the parent directory are OUR modified variants (sphere-feet
-collision, OmniHand integration) and stay in the repo; only the vendor
-meshes are fetched.
+        assets/urdf/x2_ultra/meshes/

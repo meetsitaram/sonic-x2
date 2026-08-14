@@ -1,59 +1,22 @@
 #!/usr/bin/env python3
-"""ONNX-driven MuJoCo evaluation for X2 Ultra, with optional .pt parity check.
+"""ONNX-driven MuJoCo evaluation for X2 Ultra.
 
-Mirrors :mod:`eval_x2_mujoco` exactly (same observation construction, same
-RSI/auto-reset logic, same PD control loop) but the policy call swaps the
-PyTorch ``UniversalTokenActor`` for an ``onnxruntime.InferenceSession``
-loaded from a fused ``model_step_NNNNNN_g1.onnx`` file.
+Point it at the fused SONIC ONNX and a motion-lib PKL and it launches a
+MuJoCo viewer with the policy tracking the clip; ``--no-viewer`` runs the
+same loop headless, ``--kinematic`` plays the reference without physics,
+``--record`` captures either mode to mp4.
 
-The fused ONNX (produced by
-``inference_helpers.export_universal_token_module_as_onnx`` with
-``encoder_name="g1", decoder_name="g1_dyn"``) takes a single 1670-D vector::
+The fused ONNX takes a single 1670-D vector::
 
     actor_obs = [tokenizer_obs(680) | proprioception(990)]
 
-and returns a 31-D action in IsaacLab DOF order. We simply concatenate the
-same ``build_tokenizer_obs`` and ``ProprioceptionBuffer.get_flat`` outputs
-that the .pt rollout uses, then run the ONNX session.
-
-Two modes:
-
-1. **ONNX-only rollout** (``--onnx FILE``). Same loop as
-   ``eval_x2_mujoco.py`` with the ONNX session driving actions. Useful as a
-   sanity / live-viewer demo of the deploy artifact.
-
-2. **Parity check** (``--onnx FILE --compare-pt CHECKPOINT.pt``). Loads BOTH
-   the .pt actor and the ONNX session, computes both actions on identical
-   observations every control tick, and writes per-step deltas to a CSV.
-   The .pt action drives the simulation (the ONNX action is a passive
-   observer) so the rollout stays reproducible across runs. At end-of-run
-   prints a PASS/FAIL summary against ``--parity-threshold`` (default 1e-4).
-
-   For CI-style runs, combine with ``--no-viewer --max-episode 30.0``.
-
-This is **Phase 0** of the X2 Ultra ONNX deploy plan
-(``.cursor/plans/x2-ultra-onnx-deploy_9dde7da2.plan.md``): proving that the
-exact ONNX graph the C++ harness will run produces the same actions as the
-.pt does in MuJoCo, *before* we invest in any C++ / ROS 2 work.
-
-``--compare-pt`` parity check (2026-05-01):
-   The .pt actor used in compare mode is :class:`UniversalTokenActor`
-   from :mod:`eval_x2_mujoco`. As of 2026-05-01 this reimplementation
-   has been verified against a fresh ``dump_isaaclab_step0`` dump of
-   the live ``UniversalTokenModule`` and matches it to ~3.6e-7 rad on
-   the iter-2000 sphere-feet checkpoint. Combined with the
-   export-time check in :mod:`reexport_x2_g1_onnx` (live module ↔
-   ONNX, ~5e-7 rad), ``--compare-pt`` is a meaningful end-to-end
-   regression on the deployed policy.
-
-   If ``--compare-pt`` fails for a particular checkpoint, the most
-   likely cause is a checkpoint mismatch between the .pt and .onnx
-   inputs (different runs, different iters). Re-export the ONNX from
-   the .pt with :mod:`reexport_x2_g1_onnx` and re-run the compare.
+and returns a 31-D action in IsaacLab DOF order. Observation construction
+(and all X2 constants) come from :mod:`eval_x2_mujoco`, shared with the
+deployment stack. The real robot's deploy tuning preset (PD trim, target
+clamps, LPF, action clip) is applied by default — see ``--tuning``.
 """
 
 import argparse
-import csv
 import os
 import sys
 import time
@@ -63,7 +26,6 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 import onnxruntime as ort
-import torch
 
 # Reuse all constants and helpers from eval_x2_mujoco.py — by importing rather
 # than copy-pasting, both scripts stay in lockstep if the X2 constants ever
@@ -88,10 +50,8 @@ from eval_x2_mujoco import (  # noqa: E402  (sys.path setup must come first)
     compute_motion_state,
     get_motion_fps,
     get_total_frames,
-    load_actor_from_checkpoint,
     load_deploy_tuning,
     load_motion_data,
-    load_playlist_motion_data,
     quat_rotate_inverse,
 )
 
@@ -181,6 +141,80 @@ class VideoRecorder:
         print(f"  [record] wrote {self.frames} frames -> {self.path}", flush=True)
 
 
+def run_kinematic(args) -> None:
+    """Kinematic reference playback (no physics, no policy): pose the robot
+    straight from the clip frames (PKL ``dof`` is MJCF qpos convention).
+    Viewer by default; with ``--record`` renders one offscreen pass over the
+    selected clip(s) to mp4 at the clip fps instead."""
+    import joblib
+    data = joblib.load(args.motion)
+    names = list(data.keys())
+    if args.clip:
+        if args.clip in names:
+            names = [args.clip]
+        else:
+            names = [k for k in names if args.clip.lower() in k.lower()]
+        if not names:
+            raise SystemExit(f"--clip '{args.clip}' matched no clips in {args.motion}")
+    model = mujoco.MjModel.from_xml_path(MJCF_PATH)
+    mjd = mujoco.MjData(model)
+    pelvis = model.body("pelvis").id
+
+    def pose(m, f):
+        mjd.qpos[0:3] = m["root_trans_offset"][f]
+        q = np.asarray(m["root_rot"][f])  # xyzw
+        mjd.qpos[3:7] = [q[3], q[0], q[1], q[2]]
+        mjd.qpos[7:7 + NUM_DOFS] = np.asarray(m["dof"][f])
+        mjd.qvel[:] = 0
+        mujoco.mj_forward(model, mjd)
+
+    if args.record:
+        rec = VideoRecorder(args.record, model, pelvis,
+                            float(data[names[0]]["fps"]))
+        for name in names:
+            m = data[name]
+            n_frames = np.asarray(m["dof"]).shape[0]
+            print(f"[kinematic] {name}: {n_frames} frames @ {m['fps']:g} fps",
+                  flush=True)
+            for f in range(args.init_frame, n_frames):
+                pose(m, f)
+                rec.capture(mjd)
+        rec.close()
+        return
+
+    state = {"paused": False, "clip": 0, "frame": float(args.init_frame)}
+
+    def key_cb(keycode):
+        import glfw
+        if keycode == glfw.KEY_SPACE:
+            state["paused"] = not state["paused"]
+        elif keycode == glfw.KEY_R:
+            state["frame"] = float(args.init_frame)
+        elif keycode == glfw.KEY_N:
+            state["clip"] = (state["clip"] + 1) % len(names)
+            state["frame"] = float(args.init_frame)
+
+    print("Kinematic playback: SPACE pause, R restart, N next clip.", flush=True)
+    with mujoco.viewer.launch_passive(
+        model, mjd, key_callback=key_cb,
+        show_left_ui=False, show_right_ui=False,
+    ) as viewer:
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        viewer.cam.trackbodyid = pelvis
+        viewer.cam.azimuth, viewer.cam.elevation, viewer.cam.distance = 120, -20, 2.5
+        while viewer.is_running():
+            if state["paused"]:
+                viewer.sync()
+                time.sleep(0.02)
+                continue
+            m = data[names[state["clip"]]]
+            n_frames = np.asarray(m["dof"]).shape[0]
+            pose(m, int(state["frame"]) % n_frames)
+            viewer.sync()
+            time.sleep(1.0 / (float(m["fps"]) * max(args.speed, 1e-6)))
+            state["frame"] += 1
+
+
 # ---------- ONNX wrapper ----------
 class OnnxActor:
     """Thin wrapper that mimics ``UniversalTokenActor.__call__`` signature.
@@ -243,74 +277,6 @@ class OnnxActor:
         )
 
 
-# ---------- Parity logger ----------
-class ParityLogger:
-    """Accumulates per-step PT-vs-ONNX action deltas and writes a CSV."""
-
-    def __init__(self, csv_path: Path):
-        self.csv_path = csv_path
-        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = self.csv_path.open("w", newline="")
-        self._writer = csv.writer(self._fh)
-        self._writer.writerow(
-            [
-                "step",
-                "sim_time",
-                "delta_inf",
-                "delta_l2",
-                "delta_mean_abs",
-                "a_pt_inf",
-                "a_onnx_inf",
-            ]
-        )
-        self.deltas_inf: list[float] = []
-        self.deltas_l2: list[float] = []
-        self.deltas_mean_abs: list[float] = []
-
-    def log(self, step: int, sim_time: float, a_pt: np.ndarray, a_onnx: np.ndarray) -> None:
-        diff = a_pt - a_onnx
-        d_inf = float(np.max(np.abs(diff)))
-        d_l2 = float(np.linalg.norm(diff))
-        d_mean = float(np.mean(np.abs(diff)))
-        self.deltas_inf.append(d_inf)
-        self.deltas_l2.append(d_l2)
-        self.deltas_mean_abs.append(d_mean)
-        self._writer.writerow(
-            [
-                step,
-                f"{sim_time:.6f}",
-                f"{d_inf:.6e}",
-                f"{d_l2:.6e}",
-                f"{d_mean:.6e}",
-                f"{float(np.max(np.abs(a_pt))):.6e}",
-                f"{float(np.max(np.abs(a_onnx))):.6e}",
-            ]
-        )
-
-    def close(self) -> None:
-        self._fh.close()
-
-    def summary(self, threshold: float) -> tuple[bool, str]:
-        if not self.deltas_inf:
-            return False, "  No samples recorded."
-        arr_inf = np.asarray(self.deltas_inf)
-        arr_mean = np.asarray(self.deltas_mean_abs)
-        max_inf = float(arr_inf.max())
-        passed = max_inf < threshold
-        verdict = "PASS" if passed else "FAIL"
-        lines = [
-            f"  Samples:               {len(arr_inf)}",
-            f"  Max  |a_pt - a_onnx|_inf:  {max_inf:.3e}",
-            f"  Mean |a_pt - a_onnx|_inf:  {float(arr_inf.mean()):.3e}",
-            f"  p95  |a_pt - a_onnx|_inf:  {float(np.percentile(arr_inf, 95)):.3e}",
-            f"  p99  |a_pt - a_onnx|_inf:  {float(np.percentile(arr_inf, 99)):.3e}",
-            f"  Mean |a_pt - a_onnx|_mean: {float(arr_mean.mean()):.3e}",
-            f"  Threshold:             {threshold:.3e}",
-            f"  Verdict:               {verdict}",
-            f"  CSV:                   {self.csv_path}",
-        ]
-        return passed, "\n".join(lines)
-
 
 # ---------- Main ----------
 def main():
@@ -329,35 +295,7 @@ def main():
             "cached model exists."
         ),
     )
-    motion_grp = parser.add_mutually_exclusive_group(required=True)
-    motion_grp.add_argument("--motion", help="Reference motion PKL.")
-    motion_grp.add_argument(
-        "--playlist",
-        help="Warehouse playlist YAML (resolved via _warehouse_playlist."
-             "build_concat). Mutually exclusive with --motion.",
-    )
-    parser.add_argument(
-        "--compare-pt",
-        default=None,
-        help=(
-            "Optional .pt checkpoint. If set, runs the .pt actor in parallel "
-            "with the ONNX session on identical inputs and logs per-step "
-            "action deltas to --parity-csv. The .pt action drives the sim."
-        ),
-    )
-    parser.add_argument(
-        "--parity-csv",
-        default="logs/x2/parity_pt_vs_onnx.csv",
-        help="Where to write the per-step PT-vs-ONNX delta CSV (compare mode).",
-    )
-    parser.add_argument(
-        "--parity-threshold",
-        type=float,
-        default=1e-4,
-        help="PASS if max |a_pt - a_onnx|_inf over the rollout is below this "
-        "(default 1e-4 per Phase 0 acceptance).",
-    )
-    parser.add_argument("--device", default="cpu", help="Torch device for the .pt actor.")
+    parser.add_argument("--motion", required=True, help="Reference motion PKL.")
     parser.add_argument("--speed", type=float, default=1.0)
     parser.add_argument(
         "--tuning",
@@ -414,36 +352,29 @@ def main():
         default=None,
         metavar="OUT.mp4",
         help="Record an offscreen 25 fps video of the rollout (headless "
-             "only — combine with --no-viewer). Needs ffmpeg on PATH.",
+             "only — combine with --no-viewer). Needs ffmpeg on PATH. "
+             "With --kinematic, records at the clip fps instead.",
     )
     parser.add_argument(
-        "--qpos-dump",
-        default=None,
-        help="Headless only: write the executed qpos trajectory of the FIRST "
-        "episode to this .npz (arrays: t [T], qpos [T,7+31], plus fps and "
-        "end reason). For offline FK, e.g. reach-point extraction.",
+        "--kinematic",
+        action="store_true",
+        help="Kinematic reference playback: pose the robot directly from "
+             "the clip frames (no physics, no policy, no ONNX needed). "
+             "Viewer, or offscreen mp4 with --record.",
     )
     parser.add_argument(
-        "--obs-dump",
+        "--clip",
         default=None,
-        help=(
-            "DEBUG: write the very first inference payload to PATH in the "
-            "X2OBSV01 binary format used by the C++ deploy's --obs-dump (see "
-            "x2_deploy_onnx_ref.cpp::DumpObsBlob and "
-            "compare_deploy_vs_isaaclab_obs.py). Layout per line: "
-            "magic[8]=X2OBSV01, tok_dim=u32(680), prop_dim=u32(990), "
-            "action_dim=u32(31), policy_time=f64, tokenizer_obs[680]=f32, "
-            "proprioception[990]=f32, action_il[31]=f64, joint_pos_mj[31]=f64, "
-            "joint_vel_mj[31]=f64, base_quat_wxyz[4]=f64, base_ang_vel[3]=f64. "
-            "Dumps tick 0 only, then exits the process so the comparator can "
-            "run against a deterministic state. Use to diff against the C++ "
-            "deploy's first-tick obs blob: any per-slot Δ in state-invariant "
-            "slots (last_action, motion_anchor terms) is a smoking gun for "
-            "an obs-construction divergence between Python eval and C++ "
-            "deploy."
-        ),
+        help="Kinematic mode: exact clip key, or substring filter "
+             "(default: all clips in the PKL).",
     )
     args = parser.parse_args()
+
+    if args.kinematic:
+        if not args.motion:
+            parser.error("--kinematic requires --motion")
+        run_kinematic(args)
+        return
 
     if args.onnx is None:
         # Default resolution order (mirrors the stack scripts): explicit
@@ -488,25 +419,8 @@ def main():
             flush=True,
         )
 
-    pt_actor = None
-    parity_logger: ParityLogger | None = None
-    if args.compare_pt is not None:
-        print(f"Loading .pt actor from {args.compare_pt} ...", flush=True)
-        pt_actor = load_actor_from_checkpoint(args.compare_pt, args.device)
-        print("  .pt actor loaded.", flush=True)
-        parity_logger = ParityLogger(Path(args.parity_csv))
-        print(f"  Parity CSV: {parity_logger.csv_path}", flush=True)
-        print(
-            f"  Parity threshold: max |a_pt - a_onnx|_inf < {args.parity_threshold:.1e}",
-            flush=True,
-        )
-
-    if args.playlist is not None:
-        print(f"Loading playlist from {args.playlist} ...", flush=True)
-        motion_data = load_playlist_motion_data(args.playlist)
-    else:
-        print(f"Loading motion from {args.motion} ...", flush=True)
-        motion_data = load_motion_data(args.motion)
+    print(f"Loading motion from {args.motion} ...", flush=True)
+    motion_data = load_motion_data(args.motion)
     total_frames = get_total_frames(motion_data)
     motion_fps = get_motion_fps(motion_data)
     print(
@@ -615,60 +529,8 @@ def main():
         # ONNX action (always computed).
         action_il_onnx = onnx_actor(proprioception, tokenizer_obs)
 
-        # ---- one-shot first-tick obs dump ----------------------------------
-        # Mirror the C++ deploy's DumpObsBlob layout exactly so the same
-        # comparator (compare_deploy_vs_isaaclab_obs.py, or a thin C++-vs-
-        # Python differ) can read both blobs. Dump on the very first tick
-        # only, then exit the process. The state captured here is bit-for-
-        # bit what the ONNX session sees at t=0 of the rollout, after RSI
-        # and the first prop_buf.append. Any divergence vs the C++ blob
-        # captured at the same point is the obs-pipeline drift bug.
-        if args.obs_dump is not None and step_count == 0:
-            import struct
-            base_quat_wxyz = mj_data.qpos[3:7].astype(np.float64)
-            base_ang_vel_w = mj_data.qvel[3:6].astype(np.float64)
-            joint_pos_mj = mj_data.qpos[7 : 7 + NUM_DOFS].astype(np.float64)
-            joint_vel_mj = mj_data.qvel[6 : 6 + NUM_DOFS].astype(np.float64)
-            # policy_time semantics in C++: seconds since CONTROL entry.
-            # Python eval has no WAIT phase, so tick 0 is policy_time = 0.
-            policy_time = 0.0
-            dump_path = Path(args.obs_dump)
-            dump_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(dump_path, "wb") as fh:
-                fh.write(struct.pack("<8sIIId",
-                    b"X2OBSV01",
-                    int(tokenizer_obs.shape[0]),
-                    int(proprioception.shape[0]),
-                    int(action_il_onnx.shape[0]),
-                    float(policy_time)))
-                fh.write(tokenizer_obs.astype(np.float32).tobytes())
-                fh.write(proprioception.astype(np.float32).tobytes())
-                fh.write(action_il_onnx.astype(np.float64).tobytes())
-                fh.write(joint_pos_mj.tobytes())
-                fh.write(joint_vel_mj.tobytes())
-                fh.write(base_quat_wxyz.tobytes())
-                fh.write(base_ang_vel_w.tobytes())
-            print(f"[obs-dump] wrote first-tick obs to {dump_path} "
-                  f"({dump_path.stat().st_size} bytes); exiting.", flush=True)
-            sys.exit(0)
-        # --------------------------------------------------------------------
 
-        # Optional .pt action and parity logging.
-        action_il_pt = None
-        if pt_actor is not None:
-            with torch.no_grad():
-                prop_t = torch.from_numpy(proprioception).unsqueeze(0).to(args.device)
-                tok_t = torch.from_numpy(tokenizer_obs).unsqueeze(0).to(args.device)
-                action_il_pt = pt_actor(prop_t, tok_t).squeeze(0).cpu().numpy()
-            assert parity_logger is not None
-            parity_logger.log(step_count, sim_time, action_il_pt, action_il_onnx)
-
-        # In compare mode the .pt action drives the sim (deterministic
-        # reference rollout). Otherwise the ONNX action drives.
-        if action_il_pt is not None:
-            action_il_drive = action_il_pt
-        else:
-            action_il_drive = action_il_onnx
+        action_il_drive = action_il_onnx
 
         action_mj = action_il_drive[MJ_TO_IL_DOF]
         if tuning is not None:
@@ -738,8 +600,6 @@ def main():
     )
     if args.max_episode > 0:
         print(f"Max episode length: {args.max_episode:.1f} s.", flush=True)
-    if pt_actor is not None:
-        print("Parity mode: .pt drives the sim, ONNX is a passive observer.", flush=True)
     if not args.no_viewer:
         print("Press SPACE pause, R reset, V toggle camera.\n", flush=True)
     else:
@@ -755,8 +615,6 @@ def main():
     )
     exit_requested = False
     cumulative_sim_seconds = 0.0
-    qpos_rows: list[np.ndarray] = []
-    qpos_times: list[float] = []
 
     if args.no_viewer:
         # Tight loop with no real-time pacing or viewer sync.
@@ -765,18 +623,6 @@ def main():
             # 50 Hz control -> capture every 2nd tick = 25 fps video.
             if recorder is not None and reason is None and step_count % 2 == 0:
                 recorder.capture(mj_data)
-            if args.qpos_dump is not None and episode_count == 0:
-                qpos_times.append(sim_time)
-                qpos_rows.append(mj_data.qpos[: 7 + NUM_DOFS].copy())
-                if reason is not None:
-                    np.savez_compressed(
-                        args.qpos_dump,
-                        t=np.asarray(qpos_times),
-                        qpos=np.stack(qpos_rows),
-                        fps=float(motion_fps),
-                        reason=str(reason),
-                    )
-                    print(f"  [qpos-dump] {len(qpos_rows)} steps -> {args.qpos_dump}", flush=True)
             cumulative_sim_seconds += CONTROL_DT
             if (
                 args.total_sim_seconds > 0
@@ -872,13 +718,6 @@ def main():
                     wall_start = time.time() - sim_time
 
         print("Viewer closed.")
-
-    if parity_logger is not None:
-        passed, summary = parity_logger.summary(args.parity_threshold)
-        parity_logger.close()
-        print("\n=== Parity check (.pt vs ONNX) ===", flush=True)
-        print(summary, flush=True)
-        sys.exit(0 if passed else 1)
 
 
 if __name__ == "__main__":
