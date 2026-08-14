@@ -579,14 +579,9 @@ def main():
         if args.max_episode > 0 and episode_seconds >= args.max_episode:
             return f"reached --max-episode={args.max_episode:.1f}s"
         if step_count % 250 == 0:
-            extra = ""
-            if action_il_pt is not None:
-                extra = (
-                    f"  delta_inf={float(np.max(np.abs(action_il_pt - action_il_onnx))):.2e}"
-                )
             print(
                 f"[ep {episode_count}] step={step_count} sim={sim_time:.2f}s "
-                f"frame={motion_frame}/{total_frames} h={pelvis_z:.3f}m{extra}",
+                f"frame={motion_frame}/{total_frames} h={pelvis_z:.3f}m",
                 flush=True,
             )
         return None
