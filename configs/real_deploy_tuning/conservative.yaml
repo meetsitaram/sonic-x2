@@ -1,0 +1,20 @@
+# Conservative real-deploy tuning preset.
+#
+# Use case: first powered run on the gantry with a new model checkpoint or
+# a new motion playlist. Tight clamp, no output filtering. Verifies the
+# policy can stand and partially track the reference before opening up.
+#
+# Rule of thumb: validate with `conservative` first, switch to `expressive`
+# once the run completes cleanly without RAMP_OUT being triggered by the
+# tilt watchdog.
+description: |
+  First-run validation on the real X2 Ultra. Tight per-joint clamp, no
+  output LPF. Mirrors the safety knobs used for the iter-4000 first
+  powered run (2026-05-02) that held rock-solid for 5 s before RAMP_OUT.
+
+action_clip:    20.0   # match training (base_env.yaml: action_clip_value)
+max_target_dev:  0.30  # ~17 deg per-joint clamp -- safe but visibly limits arms
+ramp_seconds:    2.0
+return_seconds:  2.0
+tilt_cos:       -0.3
+target_lpf_hz:   0.0   # disabled

@@ -1,0 +1,4 @@
+# AgiBot mesh assets are fetched at setup time — never committed
+*
+!README.md
+!.gitignore

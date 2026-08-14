@@ -1,0 +1,154 @@
+# Expressive real-deploy tuning preset.
+#
+# Use case: showcase the policy's motion-tracking range on standing
+# playlists (e.g. standing_gestures_v1) and VR teleop where the operator
+# needs full arm reach. The legs/waist/head stay clamped tightly so a
+# divergent policy on the high-stiffness chain (kp ~99 Nm/rad on legs)
+# cannot generate the torque spikes we saw with a uniform 1.50 rad clamp.
+# Arms run wide (kp ~14 Nm/rad, ~7x lower torque per nominal radian) so
+# IK-driven wrist targets and reach-envelope tracking are not truncated.
+#
+# Output LPF (target_lpf_hz: 8.0) tames leg/waist jitter caused by noisy
+# real sensor obs (sim doesn't have it).
+#
+# Do NOT start with this preset on a fresh model -- if the policy is going
+# to misbehave, the tighter conservative clamp catches it first.
+description: |
+  Wide arm/wrist range, tight legs/waist/head, light output LPF. Suitable
+  for stand-in-place gesture playlists and VR teleop after the model has
+  cleared conservative.yaml on the same motion class.
+
+action_clip:    20.0   # match training (base_env.yaml: action_clip_value=20).
+                       # Anything larger lets the policy emit out-of-distribution
+                       # action_il, which is then clipped, which means the
+                       # last_action proprioception fed back to the policy on
+                       # the next tick is itself OOD -- and the policy diverges
+                       # further. Observed in the 21:43 run: with clip=40 the
+                       # action was saturating ~96% of ticks (max_pre_clip
+                       # 48.97 vs training's 20), driving high-frequency
+                       # commands on the kp~99 Nm/rad legs/waist chain that
+                       # showed up as torso wobble even with target clamp 0.30.
+                       # The per-group target clamp below is what bounds
+                       # worst-case actuation; the action clip exists only to
+                       # keep the policy inside its training distribution.
+max_target_dev:        0.30  # ~17 deg global default (legs/waist/head fall
+                             # under this unless overridden below).
+max_target_dev_leg:    0.50  # ~29 deg. Loosened 2026-05-15 PM after the
+                             # 0.30 clamp was found to be the binding
+                             # constraint on forward-nudge recovery: the
+                             # policy's corrective leg targets were being
+                             # truncated mid-recovery, producing the "4-5
+                             # mini-step" walk-it-off pattern operators
+                             # reported. With KP/KD lifted (see PD trim
+                             # below) the legs can safely accept the wider
+                             # band without the torque-spike risk of the
+                             # legacy 1.50 rad scalar clamp.
+max_target_dev_waist:  0.30  # waist driven by torso_*_q reference; small
+                             # band keeps the upper body upright.
+max_target_dev_arm:    1.50  # ~86 deg, enough for full operator reach via
+                             # IK in --wrist-bypass=ik mode. arm kp ~14
+                             # Nm/rad so the same nominal travel is ~7x
+                             # less torque than the legs.
+max_target_dev_head:   0.50  # ~29 deg head sweep is enough for VR look-at.
+ramp_seconds:    2.0
+return_seconds:  2.0
+tilt_cos:       -0.3
+target_lpf_hz:   8.0   # ~5 Hz effective bandwidth; tames 5-30x cmd jitter
+                       # observed in legs/waist on real-deploy recordings
+# ---- Deployment-time PD trim (revised 2026-05-15 PM: nudge-tuned) ---------
+# Match the real-X2 motion controller's published PD per joint family,
+# captured by gear_sonic_deploy/scripts/x2_scan_mc_motors.sh during a
+# nudge test (raw scan JSONLs are gitignored; re-run the scanner in
+# STAND_DEFAULT to reproduce the numbers). Trained PD is from
+# policy_parameters.hpp (IsaacLab implicit integration); deploy PD needs
+# a multiplier to recover the loop gain because MuJoCo and the real X2
+# both apply explicit ctrl-driven torque. The Option-B compromise that
+# shipped 2026-05-15-morning revealed that forward/back nudges were
+# still under-tuned because the single ``kp_scale_waist`` knob can't
+# express MC's pattern (trained kp differs 2.81x between waist_yaw and
+# waist_pitch/roll, but MC publishes a uniform 40 N*m/rad). The split
+# knobs below let us match MC's PD exactly per subgroup.
+#
+# MC vs trained, per family (ankle + waist both split):
+#   ankle_pitch kp 40 / 21.38 -> 1.87  | kd 3.0 / 0.907 -> 3.31 (MC exact)
+#   ankle_roll  kp 30 / 21.38 -> 1.40  | kd 2.0 / 0.907 -> 2.20 (MC exact)
+#   knee        kp 150 / 99.10 -> 1.51 | kd 5.0 / 6.31  -> 0.79 (untouched; trained > MC)
+#   waist_yaw   kp 40 / 40.18 -> 1.00  | kd 8.0 / 2.56  -> 3.13 (MC exact)
+#   waist_pr    kp 40 / 14.25 -> 2.81  | kd 5.0 / 0.907 -> 5.51 (MC exact)
+#   hip         kp 100 / 99.10 -> ~1.0 | kd 3-4 / 6.31  -> 0.6  (trained > MC; leave alone)
+#
+# Why split waist > single knob: with kp_scale_waist=1.5 (the old
+# Option B), waist_yaw ran at 1.5x of MC (60 vs 40, mildly over-stiff)
+# AND waist_pitch/roll ran at 0.53x of MC (21 vs 40, very under-stiff).
+# Forward/back nudges hit the sagittal pendulum chain hardest, and
+# waist_pitch is in that chain -- the 0.53x undershoot showed up as the
+# robot still rocking forward on push. The split below puts each
+# subgroup exactly at MC's value.
+#
+# Why split ankle > single knob (added 2026-05-15 PM after operator
+# feedback that ankle-direct nudges felt "sensitive"): MC uses ASYMMETRIC
+# PD across ankle axes (pitch 40/3.0, roll 30/2.0). With a single
+# kp_scale_ankle=1.87 we matched MC's pitch but over-stiffened roll by
+# 33% (40 vs MC's 30), and kd_scale_ankle=2.5 left ankle_pitch 24%
+# under-damped vs MC (2.27 vs 3.0). Splitting lets us match MC exactly
+# on both axes. The roll knob being LOWER than the pitch knob (1.40 vs
+# 1.87) is deliberate: the frontal plane is intrinsically more rigid
+# (knees don't bend laterally; the leg+pelvis acts as a single rigid
+# body in roll), so less ankle authority is needed than in pitch.
+#
+# KD bumps matter MORE than KP bumps for nudge rejection specifically.
+# Our trained PD is critically-damped against IsaacLab's implicit model
+# (heavily under-damped on real hardware). MC's KD is 2-5x ours on every
+# trunk joint. The waist_pr KD bump (5.51x) is the single biggest knob
+# for fwd/back wobble, because it kills the torso-leaning mode before
+# ankle/hip have to spend torque fighting the gravitational moment of
+# the leaned trunk.
+kp_scale_ankle_pitch: 1.87  # match MC's 40 N*m/rad sagittal ankle KP exactly
+kp_scale_ankle_roll:  1.40  # match MC's 30 N*m/rad frontal ankle KP exactly
+kp_scale_knee:        1.51  # match MC's 150 N*m/rad knee KP exactly
+kp_scale_waist_yaw:   1.00  # match MC (trained kp already = 40 = MC)
+kp_scale_waist_pr:    2.81  # match MC's 40 N*m/rad waist_pitch/roll KP
+kd_scale_ankle_pitch: 5.00  # 2026-05-15 PM: bumped from MC-match 3.31 to
+                            # 5.00 after operator nudge testing. The MC-
+                            # match value left the sagittal ankle under-
+                            # damped against the policy's 5 Hz residual on
+                            # a non-perfectly-rigid X2: a forward push
+                            # produced a 0.30 rad ankle swing AND drove a
+                            # 0.45 rad knee secondary swing (knee = the
+                            # next-stiffest joint in the chain). Lifting
+                            # ankle_pitch KD to 5.00 (~51% above MC's 3.0
+                            # N*m*s/rad) lets the ankle absorb the impulse
+                            # locally instead of pumping it up the leg.
+                            # Result: ankle swing 0.30 -> 0.19 rad, knee
+                            # secondary swing 0.45 -> 0.25 rad on the same
+                            # nudge intensity. Idle ankle "breathing" (the
+                            # policy's 1 Hz micro-corrections) grows from
+                            # ~0.5 deg to ~1.4 deg but is not visible to
+                            # the operator. Going BELOW 3.31 here is
+                            # catastrophic: a brief test at kd_scale 2.0
+                            # produced 5-7 Hz ankle resonance with 30 deg
+                            # ankle swings on the same nudge (closed-loop
+                            # instability).
+kd_scale_ankle_roll:  2.20  # match MC's 2.0 N*m*s/rad frontal ankle KD
+kd_scale_knee:        2.00  # 2026-05-15 PM: bump from trained baseline
+                            # (1.0x) to 2.0x. With ankle_pitch KD already
+                            # at 5.0, the knee was the next-loudest joint
+                            # in forward-nudge recovery (0.45 rad swing).
+                            # Doubling knee KD drops knee secondary swing
+                            # to 0.25 rad without affecting idle (knee is
+                            # silent at idle regardless: pos_p2p < 0.2
+                            # deg over a 10 s scan).
+kd_scale_hip:         2.00  # 2026-05-15 PM: bump from trained baseline
+                            # (1.0x) to 2.0x. Pairs with the ankle+knee
+                            # KD bumps: with both lower joints damped,
+                            # the hip is now the load-path for any
+                            # residual sagittal recovery torque (eff
+                            # spikes to ~21 N*m on hip_pitch during
+                            # nudge). Lifting hip KD keeps hip_pitch
+                            # from ringing as the now-stiff knee/ankle
+                            # chain transmits the impulse up. Verified
+                            # idle-safe: hip pos_p2p < 0.1 deg over a
+                            # 10 s scan with all three KD bumps active.
+kd_scale_waist_yaw:   3.13  # match MC's 8.0 N*m*s/rad waist_yaw KD
+kd_scale_waist_pr:    5.51  # match MC's 5.0 N*m*s/rad waist_pr KD;
+                            # SINGLE biggest knob for fwd/back trunk nudge wobble

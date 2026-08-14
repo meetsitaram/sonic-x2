@@ -1,0 +1,128 @@
+# walk_101 -- DANCE-FLEX variant (Phase 3) -- derived from walking_recovery_loose.yaml.
+#
+# WHY THIS PRESET EXISTS (2026-07-16):
+# walking_recovery_loose.yaml and its whole lineage (expressive -> walking_
+# recovery -> _loose) were tuned for ONE objective: push-recovery + resonance/
+# rocking suppression under teleop WALKING. Every PD choice in that file is
+# justified by a nudge-rejection or torque-budget-under-recovery argument.
+#
+# walk_101 targets a DIFFERENT objective: maximum motion-tracking RANGE and
+# SNAPPINESS so a strongly-trained SONIC fine-tune can actually hit the big
+# dance poses (kicks, single-leg stance, mambo pivots, 270/360 turns) instead
+# of having the reference truncated by the conservative clamps that were sized
+# when the model was weak.
+#
+# The knob analysis behind this preset (see
+# docs/source/user_guide/x2_pd_tuning_with_mc_scan.md):
+#   * max_target_dev_* is the PRIMARY flex knob -- it is the hard ceiling on
+#     how far the policy may move a joint from default, AND it is the ONLY
+#     target clamp in the safety stack (safety.hpp::ApplySafetyStack has no
+#     separate joint-limit clamp below it). So we LOOSEN it for range but do
+#     NOT disable it -- it stays the divergence guard on the stiff (kp~99)
+#     leg chain.
+#   * target_lpf_hz_* is the SNAPPINESS knob -- command-path phase lag makes
+#     fast choreography mushy. The likely offender is arm/head at the global
+#     8 Hz (~5 Hz bandwidth); legs already run 16 Hz and waist is disabled.
+#   * kp/kd scales are LEFT AT MC-match. They are NOT the flex knob:
+#       - kd is already correct for dance (the _loose preset reverted the
+#         expressive static-nudge kd bumps to MC-match precisely because high
+#         kd eats the torque budget on fast swings via kd*omega braking).
+#       - Do NOT drop kd below MC-match: ankle resonance becomes catastrophic
+#         (5-7 Hz) and MC-match is the physically-validated floor.
+#       - Do NOT drop kp: it reduces the authority the policy needs to crisply
+#         HIT a big dance pose and causes idle sag.
+#   * action_clip STAYS AT 20 (training's action_clip_value). Raising it feeds
+#     OOD last_action back into proprioception and diverges the policy -- a
+#     STRONGER model does not change this because it was still trained at 20.
+#
+# Deltas vs walking_recovery_loose.yaml (ALL kp/kd scales IDENTICAL):
+#   * max_target_dev_leg   0.70 -> 1.00  (bigger stride/kick/stance excursion)
+#   * max_target_dev_waist 0.45 -> 0.60  (frees roll/yaw; pitch stays joint-
+#                                         limited ~0.314 rad)
+#   * max_target_dev_arm   1.50 -> 2.00  (full dance arm reach, no truncation)
+#   * max_target_dev_head  0.50 -> 0.70  (wider head sweep for expressive moves)
+#   * target_lpf_hz_arm    (inherit 8.0) -> 16.0  (snappier arm choreography)
+#   * target_lpf_hz_head   (inherit 8.0) -> 16.0  (snappier head)
+#
+# TUNING STATUS: FIRST-PASS / UNVALIDATED. This is the "moderate first step"
+# off the known-good _loose preset. Validate on a familiar dance first
+# (e.g. dance_party_hips_003__A467), then push clamps/LPF further. Use
+# --obs-dump (raw policy target BEFORE the clamp) vs the published target to
+# confirm whether max_target_dev is actually the binding constraint on a given
+# move -- there is no max_target_dev saturation counter (only action_clip has
+# one). Give the robot space; the difficult dances need side + front clearance.
+#
+# SAFETY: this preset does NOT protect against a divergent policy any better
+# than _loose -- it deliberately opens the clamps. Run conservative.yaml then
+# walking_recovery_loose.yaml on a fresh checkpoint FIRST to confirm the policy
+# stands and recovers before letting it flex under walk_101.
+description: |
+  Phase 3 DANCE-FLEX: loosened per-group target clamps (leg 1.0, waist 0.6,
+  arm 2.0, head 0.7) + snappier arm/head LPF (16 Hz) so a strong SONIC fine-
+  tune can hit big dance poses without the reference being truncated. All
+  kp/kd scales identical to walking_recovery_loose.yaml (MC-match); action_clip
+  stays at 20. First-pass / unvalidated -- verify on a familiar dance, then
+  push clamps/LPF further.
+
+action_clip:    20.0   # match training (base_env.yaml: action_clip_value=20).
+                       # DO NOT raise: larger clip lets the policy emit OOD
+                       # action_il, the clipped last_action fed back as
+                       # proprioception is itself OOD, and the policy diverges
+                       # further. A stronger model does not change this floor.
+max_target_dev:        0.30  # ~17 deg global default (any group without an
+                             # override below falls under this).
+max_target_dev_leg:    1.00  # ~57 deg. LOOSENED from _loose's 0.70. Big dance
+                             # excursions (kicks / single-leg stance / pivots /
+                             # 270-360 turns) were the most likely thing the
+                             # 0.70 clamp truncated. Still the ONLY divergence
+                             # guard on the kp~99 leg chain, so kept finite.
+max_target_dev_waist:  0.60  # LOOSENED from _loose's 0.45. Mostly frees ROLL +
+                             # YAW; waist PITCH is joint-limited ~0.314 rad so
+                             # the clamp barely binds pitch.
+max_target_dev_arm:    2.00  # ~115 deg. LOOSENED from _loose's 1.50 for full
+                             # dance arm reach. arm kp ~14 Nm/rad so the wider
+                             # band is ~7x less torque per radian than the legs.
+max_target_dev_head:   0.70  # ~40 deg. LOOSENED from _loose's 0.50 for wider
+                             # expressive head sweeps.
+ramp_seconds:    2.0
+return_seconds:  2.0
+tilt_cos:       -0.3
+target_lpf_hz:        8.0   # ~5 Hz effective bandwidth. Global default; legs +
+                            # waist + arm + head all have explicit overrides
+                            # below, so this only bites if a future group is
+                            # added without an override.
+target_lpf_hz_leg:    16.0  # ~10 Hz bandwidth. UNCHANGED from _loose. Nearly
+                            # transparent for the policy's 2-4 Hz operating band
+                            # while rejecting >25 Hz sensor obs noise.
+target_lpf_hz_waist:  0.0   # DISABLED. UNCHANGED from _loose ("let the closed-
+                            # loop policy do the work"; removes command-path
+                            # phase lag). Trade-off: re-exposes >25 Hz waist
+                            # command jitter -- if a mechanical buzz appears,
+                            # walk this back toward 16.0.
+target_lpf_hz_arm:    16.0  # ~10 Hz bandwidth. RAISED from inherited 8.0 for
+                            # snappier arm choreography -- the global 8 Hz
+                            # (~5 Hz bandwidth) visibly softens fast dance arm
+                            # moves. TRADE-OFF: re-exposes >25 Hz arm command
+                            # jitter; if arm buzz appears, walk back toward 8.0
+                            # (or drop to 0.0 to go fully snappy at the cost of
+                            # more jitter).
+target_lpf_hz_head:   16.0  # ~10 Hz bandwidth. RAISED from inherited 8.0 for
+                            # snappier head. Same trade-off as arm.
+
+# ---- Deployment-time PD trim -- IDENTICAL to walking_recovery_loose.yaml ----
+# NOT the flex knob. MC-match on every family. See the header for why lowering
+# kd (ankle resonance) or kp (loss of pose-tracking authority + idle sag) is
+# the wrong move for dance. If a dance introduces a NEW ring/wobble, tune PD
+# per docs/source/user_guide/x2_pd_tuning_with_mc_scan.md; do not guess here.
+kp_scale_ankle_pitch: 1.87  # MC-match
+kp_scale_ankle_roll:  1.40  # MC-match
+kp_scale_knee:        1.51  # MC-match
+kp_scale_waist_yaw:   1.00  # MC-match
+kp_scale_waist_pr:    2.81  # MC-match
+kd_scale_ankle_pitch: 3.31  # MC-match (do NOT go below 3.0 = MC; ankle
+                            # resonance becomes catastrophic)
+kd_scale_ankle_roll:  2.20  # MC-match
+kd_scale_knee:        0.792 # MC-match (kd_eff = 6.31 * 0.792 = 5.00 = MC)
+kd_scale_hip:         0.476 # MC-match (kd_eff = 6.31 * 0.476 = 3.00 = MC)
+kd_scale_waist_yaw:   3.13  # MC-match
+kd_scale_waist_pr:    5.51  # MC-match (legacy alias: waist_pitch + waist_roll)

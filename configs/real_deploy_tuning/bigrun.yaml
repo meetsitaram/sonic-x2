@@ -1,0 +1,71 @@
+# bigrun.yaml -- the big-run model's demo preset (rung 0 of the BIGRUN
+# LADDER). walking_soft_kp.yaml with TWO arm-only changes:
+#   target_lpf_hz_arm:   8 (global) -> 0.0   (DISABLED, waist precedent)
+#   max_target_dev_arm:  1.50       -> 2.00
+#
+# THE BIGRUN LADDER (2026-08-11, from the deploy-tuning sweep in
+# docs/experiments/bigrun_2026_08_07.md): every damping layer in the old
+# chain was sized against weaker models. Sim-measured against 14000:
+# trained gains track 11/11 boxing + 6/6 dances with ZERO extra recovery
+# steps and lean-recover 40 N shoulder bursts; the soft_kp chain drops
+# clips and staggers ~17 extra steps per dance. Command chatter above
+# 10 Hz is ~1% of power on every group -- the LPFs guard against noise
+# this model no longer emits. The ladder walks the protections back one
+# attributable rung at a time; EVERY rung keeps dev clamps + action_clip
+# 20 (the slam armor) and the deploy wrist freeze.
+#
+#   rung 0  bigrun.yaml       arms freed (LPF 0, dev 2.0)      <- DEMO
+#   rung 1  bigrun_wide.yaml  + leg/waist dev clamps widened
+#           (1.20/0.80) -- sim-verified demo-clean on EVERYTHING at
+#           unchanged gains. See its header for the ablation story.
+# (A kp/kd-parity ladder was staged 2026-08-11 and FALSIFIED by the
+# sweep the same day: gains toward trained under the old clamps got
+# monotonically worse; with clamps opened, soft gains equal trained
+# gains exactly. The clamps were the whole problem -- see bigrun doc.)
+#
+# HARDWARE TEST ORDER per rung (the order the historical failures
+# appeared): static chest-nudge (listen for the 5-7 Hz ankle ring) ->
+# idle stand (waist wobble) -> in-place turns -> one dance -> boxing.
+# Anything rings/wobbles -> step back ONE rung (one X2_RITUAL_TUNING
+# word). Sim scores per rung: deploy_tuning_sweep.sh, bigrun doc.
+#
+# Why arms first and free: punch strokes are 3-5 Hz content; the 8 Hz
+# arm LPF keeps only 69% of stroke speed (16 Hz keeps 87%) and punch
+# targets saturate the 1.50 rad dev clamp on ~10% of samples in CLEAN
+# tracking. Arms carry no balance load; in-sweep, freeing them IMPROVED
+# survival (boxing 5/11 -> 7/11, gangam dance fall eliminated) -- a
+# lagged arm fights the policy's own momentum management. Watch on
+# hardware: shoulder/elbow buzz, punch follow-through overshoot.
+#
+# Legs, waist, head, every kp/kd scale: IDENTICAL to walking_soft_kp.yaml.
+
+description: |
+  BIGRUN rung 0 (demo candidate): walking_soft_kp + arm LPF DISABLED +
+  arm dev clamp 2.00. Full-fidelity arm strokes for combat/fast dances
+  under the big-run model; balance-relevant groups untouched. Ladder
+  continues in bigrun_legs_lpf0 / bigrun_parity*.
+
+action_clip:    20.0
+max_target_dev:        0.30
+max_target_dev_leg:    0.70
+max_target_dev_waist:  0.45
+max_target_dev_arm:    2.00   # arm change 2 (was 1.50)
+max_target_dev_head:   0.50
+ramp_seconds:    2.0
+return_seconds:  2.0
+tilt_cos:       -0.3
+target_lpf_hz:        8.0
+target_lpf_hz_leg:    16.0
+target_lpf_hz_waist:  0.0
+target_lpf_hz_arm:    0.0    # arm change 1 (was global 8)
+kp_scale_ankle_pitch: 1.40
+kp_scale_ankle_roll:  1.15
+kp_scale_knee:        1.20
+kp_scale_waist_yaw:   1.00
+kp_scale_waist_pr:    2.00
+kd_scale_ankle_pitch: 2.00
+kd_scale_ankle_roll:  1.50
+kd_scale_knee:        0.792
+kd_scale_hip:         0.476
+kd_scale_waist_yaw:   1.50
+kd_scale_waist_pr:    5.51

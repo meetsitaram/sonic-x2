@@ -1,0 +1,215 @@
+# =============================================================================
+# Real-deploy tuning schema
+# =============================================================================
+# Authoritative reference for the keys deploy_x2.sh accepts via
+# --tuning-config PATH.yaml. This file is documentation; do NOT pass it as
+# a tuning config (the deploy will load it but every value is illustrative
+# rather than a real preset).
+#
+# PARITY RULE
+# -----------
+# Tuning configs are loaded ONLY in deploy_x2.sh local / onbot modes.
+# Sim profiles (parity, handoff, gantry, gantry-dangle) deliberately reject
+# --tuning-config so the bit-exact C++<->Python parity surface against
+# eval_x2_mujoco.py cannot be silently perturbed. See
+# gear_sonic_deploy/configs/real_deploy_tuning/README.md for rationale.
+#
+# Adding a knob: extend KEY_TO_FLAG in
+# gear_sonic_deploy/scripts/tuning_config_to_args.py + the matching --flag in
+# x2_deploy_onnx_ref.cpp's CliArgs/ParseCli + a forwarding line in
+# deploy_x2.sh (or just rely on tuning_config_to_args.py to emit it). Then
+# describe it here.
+# =============================================================================
+
+# Free-form metadata. Ignored by the translator. Use this to document
+# WHY this preset exists, not WHAT it sets (the values speak for themselves).
+description: |
+  Schema reference -- not a real preset.
+
+# ---- Existing C++ binary safety/timing knobs (already individual CLI flags;
+#      pulled into the YAML so one preset captures an entire scenario) -------
+
+# Symmetric clamp on the raw ONNX output (action_il) BEFORE multiplying by
+# x2_action_scale. Matches IsaacLab training's action_clip_value (default
+# 20.0). Negative = disabled (parity tests only).
+action_clip: 20.0
+
+# Per-joint hard clamp on |target - default_angles|, in radians. Negative
+# = disabled. Use 0.30 for first powered runs, 0.60-0.80 for richer motions.
+# Set to null to use the binary default (-1, disabled). Acts as the GLOBAL
+# default for joints with no per-group override below.
+max_target_dev: 0.60
+
+# Per-group overrides for max_target_dev. Each one wins over the global
+# value above for joints in its group. Set to null (or omit) to inherit
+# the global. Designed for the case where one joint family can safely
+# take more travel than another -- e.g. on X2 Ultra the legs run kp ~99
+# Nm/rad and the arms kp ~14 Nm/rad, so the same |target - default|
+# produces ~7x the torque on legs. Tight legs + wide arms is the natural
+# setting for any teleop-driven session (see expressive.yaml).
+#
+# Group ranges (MuJoCo joint order, see policy_parameters.hpp::
+# mujoco_joint_names):
+#   max_target_dev_leg   -> indices  0..11 (hip pitch/roll/yaw, knee,
+#                                            ankle pitch/roll, both sides)
+#   max_target_dev_waist -> indices 12..14 (yaw, pitch, roll)
+#   max_target_dev_arm   -> indices 15..28 (shoulder pitch/roll/yaw,
+#                                            elbow, wrist yaw/pitch/roll,
+#                                            both sides)
+#   max_target_dev_head  -> indices 29..30 (yaw, pitch)
+max_target_dev_leg:   0.30
+max_target_dev_waist: 0.30
+max_target_dev_arm:   1.50
+max_target_dev_head:  0.50
+
+# Soft-start ramp (alpha-blend from latched WAIT pose to policy targets)
+# duration in seconds. <=0 disables the ramp.
+ramp_seconds: 2.0
+
+# Soft-exit ramp duration in seconds (RAMP_OUT lerps from last policy
+# command back to default_angles). <=0 = legacy immediate shutdown.
+return_seconds: 2.0
+
+# Tilt watchdog threshold on the IMU's gravity vector cosine. -0.3 trips
+# at ~107 deg from upright (very permissive); -0.6 ~127 deg.
+tilt_cos: -0.3
+
+# ---- Deployment-time PD trim (real-deploy only) --------------------------
+#
+# IsaacLab integrates PD against the joint-space inertia + armature
+# IMPLICITLY at training, so the same numerical KP behaves stiffer than
+# MuJoCo / real X2's EXPLICIT ctrl-driven torque. Without compensation
+# the deployed loop gain is ~1.3-1.5x lower than what training optimised
+# for, which manifests as marginal stability: robot stands fine in static
+# equilibrium but wobbles on nudge / disturbance.
+#
+# Standard fix (G16b in docs/source/user_guide/sim2sim_mujoco.md): keep
+# the trained policy as-is and bump deployed PD per joint group. The
+# eval_x2_mujoco.py Python sim has bumped ankle by 1.5x since G16b;
+# operators on the real X2 also typically need waist=1.5 (no equivalent
+# in Python sim because MuJoCo doesn't reproduce the real-robot torso
+# inertia distribution).
+#
+# All scales are MULTIPLICATIVE on the trained kps[] / kds[] from
+# policy_parameters.hpp. Default 1.0 (= no trim). Reject <= 0 at parse.
+# Joint-family substring matching mirrors eval_x2_mujoco.py::
+# _deployment_pd_scale: hip / knee / ankle / waist / shoulder / elbow /
+# wrist / head. Effective scale on a joint = global * family.
+kp_scale:          1.0   # global multiplier on every joint's KP
+kp_scale_hip:      1.0
+kp_scale_knee:     1.0
+# Ankle has THREE knobs because MC publishes ASYMMETRIC PD across
+# ankle axes (pitch kp=40 kd=3.0, roll kp=30 kd=2.0). Trained kps are
+# uniform 21.38 across both, so matching MC requires ankle_pitch=1.87
+# and ankle_roll=1.40. The legacy ``kp_scale_ankle`` alias multiplies
+# BOTH subgroups (backward compat); effective scale on an ankle joint
+# = kp_scale_ankle * kp_scale_ankle_{pitch,roll}. All default to 1.0.
+kp_scale_ankle:        1.5   # LEGACY alias; G16b-validated single-knob default
+kp_scale_ankle_pitch:  1.0   # ankle_pitch only; 1.87 matches MC's 40 N*m/rad
+kp_scale_ankle_roll:   1.0   # ankle_roll only; 1.40 matches MC's 30 N*m/rad
+# Waist has FIVE knobs (two layers of legacy alias + three explicit
+# subgroups). The 2.81x trained-kp gap between waist_yaw (40 N*m/rad)
+# and waist_pitch/roll (14.25 N*m/rad) drives the yaw vs pr split,
+# and the 2026-05-30 MC-vs-SONIC torso-nudge scan drives the further
+# split of waist_pr into per-axis pitch and roll knobs: closed-loop
+# response on the two axes diverges in opposite directions (pitch
+# +45% over MC's resistance, roll -72% under MC) at identical PD
+# because the COM moves asymmetrically about the two axes. Splitting
+# gives one knob per physical axis.
+#
+# Effective scale on a waist joint =
+#   kp_scale_waist * kp_scale_waist_{yaw, pr * {pitch, roll}}
+# All five default to 1.0, so existing presets that only set
+# kp_scale_waist_pr keep working bit-for-bit. New presets should
+# prefer the explicit kp_scale_waist_pitch / kp_scale_waist_roll
+# knobs (and same for kd).
+kp_scale_waist:       1.0   # LEGACY alias (applies to ALL three subgroups)
+kp_scale_waist_yaw:   1.0   # waist_yaw_joint only; trained kp=40 matches MC
+kp_scale_waist_pr:    1.0   # LEGACY alias (applies to BOTH waist_pitch and
+                            # waist_roll); 2.81 matches MC. Prefer the per-
+                            # axis knobs below for new presets.
+kp_scale_waist_pitch: 1.0   # waist_pitch_joint only (sagittal lean). Composes
+                            # with waist + waist_pr above. SONIC sits at +45%
+                            # over MC's pitch resistance at MC-match PD, so
+                            # this is rarely the knob that needs lifting.
+kp_scale_waist_roll:  1.0   # waist_roll_joint only (lateral lean). Composes
+                            # with waist + waist_pr above. Lateral compliance
+                            # at MC-match PD is -72% of MC; tune direction
+                            # via a post-fix MC-vs-SONIC lateral nudge scan,
+                            # do NOT prescribe a starting value sight-unseen.
+kp_scale_shoulder: 1.0
+kp_scale_elbow:    1.0
+kp_scale_wrist:    1.0
+kp_scale_head:     1.0
+kd_scale:          1.0   # global multiplier on every joint's KD
+kd_scale_hip:      1.0
+kd_scale_knee:     1.0
+kd_scale_ankle:        1.0   # LEGACY alias; KD untouched at G16b default
+kd_scale_ankle_pitch:  1.0   # MC kd=3.0 vs trained 0.907 -> 3.31 matches MC.
+                             # Bump this if forward/back ankle nudges feel
+                             # "springy" / under-damped.
+kd_scale_ankle_roll:   1.0   # MC kd=2.0 vs trained 0.907 -> 2.20 matches MC
+kd_scale_waist:        1.0   # LEGACY alias (applies to ALL three waist subgroups)
+kd_scale_waist_yaw:    1.0   # MC kd=8.0 vs trained 2.56 -> 3.13 matches MC
+kd_scale_waist_pr:     1.0   # LEGACY alias (applies to BOTH waist_pitch + roll).
+                             # MC kd=5.0 vs trained 0.907 -> 5.51 matches MC.
+                             # Prefer the per-axis knobs below for new presets.
+kd_scale_waist_pitch:  1.0   # waist_pitch_joint only. SONIC's sagittal push
+                             # response is already +45% stronger than MC at
+                             # MC-match PD; don't bump this above 1.0 without
+                             # explicit fwd/back-nudge scan evidence.
+kd_scale_waist_roll:   1.0   # waist_roll_joint only. SONIC's lateral push
+                             # response is -72% of MC at MC-match PD AND the
+                             # policy moves its commanded target with the
+                             # disturbance (gait tracker), so direction of
+                             # trim must come from a post-fix lateral nudge
+                             # scan rather than an a priori value.
+kd_scale_shoulder:     1.0
+kd_scale_elbow:    1.0
+kd_scale_wrist:    1.0
+kd_scale_head:     1.0
+
+# ---- New post-policy filters (parity-safe by construction) ----------------
+
+# First-order EMA cutoff on the published joint targets. The filter runs
+# AFTER the safety stack and BEFORE the bus, never inside the policy's
+# observation pipeline -- so --obs-dump output is identical with this on or
+# off, and sim parity is preserved by the wrapper's hard refusal to load
+# tuning configs in sim mode. RAMP_OUT and SAFE_HOLD bypass.
+#
+# ``target_lpf_hz`` is the GLOBAL default for joints with no per-group
+# override below. Per-group keys (``target_lpf_hz_{leg,waist,arm,head}``)
+# override the global on their slice -- they let you trade SONIC's policy
+# bandwidth differently for the legs (which need wide bandwidth for
+# heel-strike correction) vs. the waist (which sees ~2 Hz resonance under
+# active walking and benefits from a tighter cutoff).
+#
+# Per-group convention (mirrors max_target_dev_*):
+#   null / omitted / negative -> inherit ``target_lpf_hz``
+#   0.0                       -> disabled on this group (= passthrough)
+#   > 0.0                     -> use this cutoff on this group
+#
+# Recommended values (50 Hz OnControl rate):
+#   0.0 (or null)  -> disabled. Default.
+#   8.0            -> ~5 Hz effective bandwidth. Tames leg jitter without
+#                     visibly delaying arm gestures.
+#   5.0            -> ~3 Hz. More aggressive smoothing; arms may feel slow.
+#   12.0           -> ~7.5 Hz. Light touch; preserves snappier motions.
+#   target_lpf_hz_waist=2-3 -> recommended fix for the 2.0-2.5 Hz waist
+#                              resonance observed in the Phase 1b torso
+#                              push A/B scan (2026-05-30) under SONIC. Sits
+#                              just above the resonance so it's attenuated
+#                              ~70-80% while slow operator-tracked motion
+#                              still passes.
+#
+# Group ranges (MuJoCo joint order, see policy_parameters.hpp::
+# mujoco_joint_names):
+#   target_lpf_hz_leg   -> indices  0..11 (hip+knee+ankle, both sides)
+#   target_lpf_hz_waist -> indices 12..14 (yaw, pitch, roll)
+#   target_lpf_hz_arm   -> indices 15..28 (shoulder+elbow+wrist, both sides)
+#   target_lpf_hz_head  -> indices 29..30 (yaw, pitch)
+target_lpf_hz:       0.0
+target_lpf_hz_leg:   null   # inherit target_lpf_hz
+target_lpf_hz_waist: null   # set to 2-3 to suppress active-walking waist wobble
+target_lpf_hz_arm:   null
+target_lpf_hz_head:  null

@@ -1,0 +1,55 @@
+# walking_soft_kp_snappy_arms.yaml -- walking_soft_kp.yaml with ONE change:
+# arm target LPF 8 -> 16 Hz.
+#
+# Why (2026-08-10, dance-bank expansion): shadow_boxing punch strokes are
+# 3-5 Hz arm content with peak joint velocities 25-35 rad/s in the
+# reference. The inherited global target_lpf_hz=8.0 (~5 Hz effective
+# bandwidth) sits right on that band and measurably damps the punches:
+# same-clip A/B under 14000 in eval_x2_mujoco --real-deploy-tuning shows
+# arm qvel RMS 1.47 -> 1.24 rad/s and peak 14.6 -> 11.2 rad/s (-23%)
+# with the 8 Hz chain. 16 Hz is the same move that fixed leg phase-lag
+# ringing in this preset's own history (target_lpf_hz_leg 8 -> 16).
+#
+# Risk profile: LOW. Arms carry no balance load; the dev clamp
+# (max_target_dev_arm 1.50) and action_clip 20 stay untouched, so the
+# slam-protection layers all hold. The re-exposed band is 8-25 Hz arm
+# command jitter -- watch for mechanical buzz at the shoulders/elbows;
+# if it appears, fall back to walking_soft_kp.yaml (one word in the
+# ritual env X2_RITUAL_TUNING).
+#
+# Head stays at the 8 Hz global -- nothing fast is asked of it.
+#
+# Everything below the marker is a VERBATIM copy of walking_soft_kp.yaml
+# (2026-08-10 state); only description, target_lpf_hz_arm are new. Keep
+# them in sync if the base preset moves.
+
+description: |
+  walking_soft_kp + arm LPF 16 Hz (was global 8). Frees 3-5 Hz punch /
+  fast-dance arm strokes that the 8 Hz filter measurably damps (-23%
+  peak arm speed on shadow_boxing under 14000). Balance-relevant groups
+  (legs, waist) and every clamp are IDENTICAL to walking_soft_kp.yaml.
+
+action_clip:    20.0
+max_target_dev:        0.30
+max_target_dev_leg:    0.70
+max_target_dev_waist:  0.45
+max_target_dev_arm:    1.50
+max_target_dev_head:   0.50
+ramp_seconds:    2.0
+return_seconds:  2.0
+tilt_cos:       -0.3
+target_lpf_hz:        8.0
+target_lpf_hz_leg:    16.0
+target_lpf_hz_waist:  0.0
+target_lpf_hz_arm:    16.0   # THE ONE CHANGE vs walking_soft_kp.yaml
+kp_scale_ankle_pitch: 1.40
+kp_scale_ankle_roll:  1.15
+kp_scale_knee:        1.20
+kp_scale_waist_yaw:   1.00
+kp_scale_waist_pr:    2.00
+kd_scale_ankle_pitch: 2.00
+kd_scale_ankle_roll:  1.50
+kd_scale_knee:        0.792
+kd_scale_hip:         0.476
+kd_scale_waist_yaw:   1.50
+kd_scale_waist_pr:    5.51
