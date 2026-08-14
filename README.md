@@ -6,6 +6,43 @@ the deployment-ready X2 stack. Everything needed is in this repo: policy
 (ONNX), robot model (MJCF + meshes), reference motions, the validated
 MuJoCo player, and the real-deploy tuning presets. CPU-only.
 
+## Kinematic reference vs SONIC (side by side)
+
+Left: the reference motion played kinematically (poses written straight to
+the sim, no physics). Right: the SONIC policy tracking that same reference
+under full physics with the real robot's deploy tuning — both clips run to
+`motion_end` with no falls.
+
+**Relaxed walk** (`Relaxed_walk_forward_001__A057`, 14.8 s):
+
+![Relaxed walk preview](media/relaxed_walk_preview.gif)
+
+**Gangnam victory dance** (`victory_dance_gangam_style_rodeo_R_001__A324`,
+9.2 s, from the gamepad demo bank, played under the `bigrun` demo preset):
+
+![Gangnam dance preview](media/gangam_preview.gif)
+
+*(10 s previews — full videos:
+[walk side-by-side](media/relaxed_walk_side_by_side.mp4) ·
+[dance side-by-side](media/gangam_side_by_side.mp4) ·
+[walk kinematic](media/relaxed_walk_kinematic.mp4) ·
+[walk SONIC](media/relaxed_walk_sonic.mp4) ·
+[dance kinematic](media/gangam_kinematic.mp4) ·
+[dance SONIC](media/gangam_sonic.mp4))*
+
+> The `.mp4`s are tracked with **git LFS** — install `git-lfs` before
+> cloning to get them. The GIF previews and everything else (model,
+> motions, scripts) are plain git and work regardless.
+
+Reproduce (needs ffmpeg on PATH):
+
+```bash
+.venv/bin/python scripts/record_kinematic.py \
+    --motion motions/x2_relaxed_walk.pkl --out media/relaxed_walk_kinematic.mp4
+./play_relaxed_walk.sh --no-viewer --max-episode 15 --record media/relaxed_walk_sonic.mp4
+./play_gangam_dance.sh --no-viewer --max-episode 10 --record media/gangam_sonic.mp4
+```
+
 ## Quickstart
 
 ```bash

@@ -138,6 +138,49 @@ ACTOR_OBS_DIM = TOK_DIM + PROP_DIM  # 1670
 # live module to ~5e-7 rad on identical inputs.
 
 
+# ---------- Offscreen video recorder ----------
+class VideoRecorder:
+    """Offscreen MuJoCo render piped to ffmpeg (H.264 mp4).
+
+    Same tracking-camera framing as the interactive viewer. Needs ``ffmpeg``
+    on PATH; headless GL (set ``MUJOCO_GL=egl`` if there is no display).
+    Recording is optional — nothing else depends on it.
+    """
+
+    def __init__(self, path: str, model, track_body_id: int, fps: float,
+                 width: int = 960, height: int = 720):
+        import shutil
+        import subprocess
+        if shutil.which("ffmpeg") is None:
+            raise SystemExit("--record needs ffmpeg on PATH")
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self.renderer = mujoco.Renderer(model, height=height, width=width)
+        self.cam = mujoco.MjvCamera()
+        self.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        self.cam.trackbodyid = track_body_id
+        self.cam.azimuth, self.cam.elevation, self.cam.distance = 120, -20, 2.5
+        self.frames = 0
+        self.path = path
+        self.proc = subprocess.Popen(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-f", "rawvideo", "-pix_fmt", "rgb24",
+             "-s", f"{width}x{height}", "-r", f"{fps}", "-i", "-",
+             "-an", "-vcodec", "libx264", "-pix_fmt", "yuv420p", "-crf", "20",
+             path],
+            stdin=subprocess.PIPE,
+        )
+
+    def capture(self, data) -> None:
+        self.renderer.update_scene(data, camera=self.cam)
+        self.proc.stdin.write(self.renderer.render().tobytes())
+        self.frames += 1
+
+    def close(self) -> None:
+        self.proc.stdin.close()
+        self.proc.wait()
+        print(f"  [record] wrote {self.frames} frames -> {self.path}", flush=True)
+
+
 # ---------- ONNX wrapper ----------
 class OnnxActor:
     """Thin wrapper that mimics ``UniversalTokenActor.__call__`` signature.
@@ -367,6 +410,13 @@ def main():
         "--total-sim-seconds for a deterministic CI-style parity check.",
     )
     parser.add_argument(
+        "--record",
+        default=None,
+        metavar="OUT.mp4",
+        help="Record an offscreen 25 fps video of the rollout (headless "
+             "only — combine with --no-viewer). Needs ffmpeg on PATH.",
+    )
+    parser.add_argument(
         "--qpos-dump",
         default=None,
         help="Headless only: write the executed qpos trajectory of the FIRST "
@@ -470,6 +520,13 @@ def main():
     mj_model.opt.timestep = SIM_DT
 
     pelvis_id = mj_model.body("pelvis").id
+
+    recorder = None
+    if args.record:
+        if not args.no_viewer:
+            parser.error("--record requires --no-viewer (offscreen render)")
+        recorder = VideoRecorder(args.record, mj_model, pelvis_id, 25.0)
+        print(f"Recording -> {args.record} @ 25 fps", flush=True)
 
     init_frame = int(args.init_frame)
     init_motion_state = compute_motion_state(motion_data, init_frame, motion_fps)
@@ -705,6 +762,9 @@ def main():
         # Tight loop with no real-time pacing or viewer sync.
         while not exit_requested:
             reason = step_once()
+            # 50 Hz control -> capture every 2nd tick = 25 fps video.
+            if recorder is not None and reason is None and step_count % 2 == 0:
+                recorder.capture(mj_data)
             if args.qpos_dump is not None and episode_count == 0:
                 qpos_times.append(sim_time)
                 qpos_rows.append(mj_data.qpos[: 7 + NUM_DOFS].copy())
@@ -739,6 +799,8 @@ def main():
                     exit_requested = True
                 else:
                     reset_state(reason)
+        if recorder is not None:
+            recorder.close()
     else:
 
         def key_callback(keycode):
