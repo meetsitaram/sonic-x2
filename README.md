@@ -30,16 +30,6 @@ under full physics with the real robot's deploy tuning — both clips run to
 > cloning to get them. The GIF previews and everything else (model,
 > motions, scripts) are plain git and work regardless.
 
-Reproduce (needs ffmpeg on PATH; hstack the pairs with ffmpeg):
-
-```bash
-./play_relaxed_walk.sh --kinematic --record media/relaxed_walk_kinematic.mp4
-./play_relaxed_walk.sh --no-viewer --max-episode 15 --record media/relaxed_walk_sonic.mp4
-./play_gangam_dance.sh --kinematic --clip victory_dance_gangam_style_rodeo_R_001__A324 \
-    --record media/gangam_kinematic.mp4
-./play_gangam_dance.sh --no-viewer --max-episode 10 --record media/gangam_sonic.mp4
-```
-
 ## Quickstart
 
 ```bash
