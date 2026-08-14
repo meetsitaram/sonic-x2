@@ -70,5 +70,6 @@ preset in `configs/real_deploy_tuning/`.
 - Every episode prints survival time and joint/pelvis tracking error;
   a clean run ends with `motion_end`, not a fall.
 - For the full deployment stack (gamepad runtime, teleop, planner, robot
-  bring-up) see the X2 deployment repo — this bundle is only the
-  fastest possible "watch the policy move" path.
+  bring-up) see the
+  [X2 deployment repo](https://github.com/meetsitaram/GR00T-WholeBodyControl-X2-review)
+  — this bundle is only the fastest possible "watch the policy move" path.
