@@ -33,7 +33,7 @@ under full physics with the real robot's deploy tuning — both clips run to
 ## Quickstart
 
 ```bash
-./install.sh              # creates .venv (mujoco, onnxruntime, torch-cpu, scipy, joblib)
+./install.sh              # creates .venv (mujoco, onnxruntime, scipy, joblib) + fetches meshes
 ./play_relaxed_walk.sh    # MuJoCo viewer: SONIC walks the relaxed-walk clip
 ./play_idle_stand.sh      # idle stand (hands-on-back loop)
 ./play_gangam_dance.sh    # Gangnam-style victory dance from the gamepad demo bank
