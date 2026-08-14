@@ -304,7 +304,7 @@ def main():
         "(gear_sonic_deploy/configs/real_deploy_tuning/*.yaml). Applies the "
         "robot's per-group PD trim (replacing the sim-only ankle bump), "
         "target-deviation clamps, target LPF, and action clip so the sim "
-        "matches the real deployment. Default: walk_101.yaml — the preset "
+        "matches the real deployment. Default: bigrun.yaml — the preset "
         "the robot is deployed with. Pass --tuning '' for raw "
         "training-parity gains (parity/eval baselines).",
     )
@@ -403,11 +403,11 @@ def main():
     kp_run, kd_run = KP, KD
     _lpf_y = {"y": None}  # target LPF state; reset with each episode
     if args.tuning == "__default__":
-        # walk_101 is the preset the reference robot deploys with; default
+        # bigrun is the preset the robot demos this model with; default
         # to it so sim behavior matches the real robot out of the box.
         default_yaml = (
             Path(__file__).resolve().parents[1]
-            / "configs/real_deploy_tuning/walk_101.yaml"
+            / "configs/real_deploy_tuning/bigrun.yaml"
         )
         args.tuning = str(default_yaml) if default_yaml.is_file() else ""
     if args.tuning:

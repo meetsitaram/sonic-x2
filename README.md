@@ -41,13 +41,12 @@ under full physics with the real robot's deploy tuning — both clips run to
 
 ## Deploy-parity tuning (on by default)
 
-The player applies the **real robot's deploy tuning** out of the box
-(`configs/real_deploy_tuning/walk_101.yaml` — per-group PD trim, per-joint
-target-deviation clamps, target low-pass filter, action clip), so what you
-see in MuJoCo is the deployed behavior, not raw training gains. The dance
-script uses `bigrun.yaml`, the demo preset the dances are deployed with.
-Pass `--tuning ''` for training-parity gains, or point `--tuning` at any
-preset in `configs/real_deploy_tuning/`.
+The player applies the **real robot's demo tuning** out of the box
+(`configs/real_deploy_tuning/bigrun.yaml` — per-group PD trim, per-joint
+target-deviation clamps, target low-pass filter, action clip: the preset
+this exact checkpoint is deployed with), so what you see in MuJoCo is the
+deployed behavior, not raw training gains. Pass `--tuning ''` for
+training-parity gains.
 
 ## Contents
 
@@ -60,7 +59,7 @@ preset in `configs/real_deploy_tuning/`.
 | `assets/mjcf/x2_ultra.xml` (+ `assets/urdf/x2_ultra/meshes/`) | X2 Ultra MuJoCo model. |
 | `scripts/eval_x2_mujoco_onnx.py` | The player: ONNX policy at 50 Hz, deploy-tuned PD, RSI + fall detection, tracking metrics. |
 | `scripts/eval_x2_mujoco.py` | Constants + observation construction the player builds on (shared with the deployment stack). |
-| `configs/real_deploy_tuning/` | Robot tuning presets (`walk_101` default, `bigrun` demo config, and variants). |
+| `configs/real_deploy_tuning/bigrun.yaml` | The robot's demo tuning preset for this checkpoint (applied by default). |
 
 ## Notes
 
