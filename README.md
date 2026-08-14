@@ -39,14 +39,6 @@ under full physics with the real robot's deploy tuning — both clips run to
 ./play_gangam_dance.sh    # Gangnam-style victory dance from the gamepad demo bank
 ```
 
-Useful variants (flags pass through to the player):
-
-```bash
-./play_relaxed_walk.sh --no-viewer --max-episode 20   # headless + tracking metrics
-./play_gangam_dance.sh --speed 0.5                    # half-speed reference
-./play_relaxed_walk.sh --tuning ''                    # raw training-parity gains
-```
-
 ## Deploy-parity tuning (on by default)
 
 The player applies the **real robot's deploy tuning** out of the box
