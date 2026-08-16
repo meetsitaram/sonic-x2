@@ -43,6 +43,7 @@ from eval_x2_mujoco import (  # noqa: E402  (sys.path setup must come first)
     KP,
     MJ_TO_IL_DOF,
     MJCF_PATH,
+    MUJOCO_JOINT_NAMES,
     NUM_DOFS,
     SIM_DT,
     ProprioceptionBuffer,
@@ -363,6 +364,20 @@ def main():
              "Viewer, or offscreen mp4 with --record.",
     )
     parser.add_argument(
+        "--action-clip",
+        type=float,
+        default=None,
+        help="Standalone action clip (rad, IL units) applied even with "
+             "--tuning '' (e.g. frozen-g1core v2: --tuning '' "
+             "--action-clip 20 --freeze-wrist).",
+    )
+    parser.add_argument(
+        "--freeze-wrist",
+        action="store_true",
+        help="Zero wrist actions (deploy-default mirror). REQUIRED for the "
+             "frozen-g1core v2 model: its wrist axes drift when free.",
+    )
+    parser.add_argument(
         "--clip",
         default=None,
         help="Kinematic mode: exact clip key, or substring filter "
@@ -418,6 +433,12 @@ def main():
             f"action_clip={tuning['action_clip']:g} (robot-matched)",
             flush=True,
         )
+
+    wrist_mj_idx = ([i for i, n in enumerate(MUJOCO_JOINT_NAMES)
+                     if "wrist" in n] if args.freeze_wrist else [])
+    if args.freeze_wrist:
+        print(f"  [wrist] freezing {len(wrist_mj_idx)} wrist joints "
+              f"(deploy-default mirror)", flush=True)
 
     print(f"Loading motion from {args.motion} ...", flush=True)
     motion_data = load_motion_data(args.motion)
@@ -555,6 +576,10 @@ def main():
             action_mj = np.clip(
                 action_mj, -tuning["action_clip"], tuning["action_clip"]
             )
+        if args.action_clip is not None:
+            action_mj = np.clip(action_mj, -args.action_clip, args.action_clip)
+        if wrist_mj_idx:
+            action_mj[wrist_mj_idx] = 0.0
         last_action_mj = action_mj.astype(np.float32).copy()
         target_pos = DEFAULT_DOF + action_mj * ACTION_SCALE
         if tuning is not None:

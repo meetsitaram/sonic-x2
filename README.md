@@ -83,7 +83,11 @@ training-parity gains.
 Select a model with the `MODEL` env var:
 
 ```bash
-MODEL=models/x2_sonic_frozen_g1core_lora_v2.onnx ./play_gangam_dance.sh
+MODEL=models/x2_sonic_frozen_g1core_lora_v2.onnx ./play_gangam_dance.sh --tuning '' --action-clip 20 --freeze-wrist
 ```
 
 Paper + comparisons: https://sonic-agibot-x2.github.io/sonic-transfer/
+
+NOTE: the default bigrun tuning preset is incumbent-specific (its
+deviation clamps destabilize other models) — v2 runs with parity
+gains + action clip + frozen wrists, as evaluated.
