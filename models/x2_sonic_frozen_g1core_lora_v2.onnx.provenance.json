@@ -1,0 +1,29 @@
+{
+ "checkpoint": "/tmp/claude-1000/-home-stickbot-Projects-GR00T-WholeBodyControl/3e782196-59ed-43aa-979d-2ba936d7e747/scratchpad/p3_8900_merged.pt",
+ "checkpoint_sha256": "2136a04ae0e0271f39995fb1fa91b0250efc216616858390bab2c0fd76a40a22",
+ "phi_sidecar": "p3_8900_merged.pt.phi.json",
+ "parity_settled_max": 1.9073486328125e-06,
+ "parity_transient_max": 9.230040550231934,
+ "onnx_vs_torch_max": 2.86102294921875e-06,
+ "enc_dims": [
+  640,
+  2048,
+  1024,
+  512,
+  512,
+  64
+ ],
+ "dec_dims": [
+  994,
+  2048,
+  2048,
+  1024,
+  1024,
+  512,
+  512,
+  29
+ ],
+ "obs_dim": 1670,
+ "action_dim": 31,
+ "note": "stateless fused any2any graph; G1 action history reconstructed in-graph from the X2 last-action block"
+}
