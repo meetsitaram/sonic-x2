@@ -80,6 +80,10 @@ training-parity gains.
 | `models/x2_sonic_14000_g1.onnx` | incumbent 14k (native X2 training) | original bundle model |
 | `models/x2_sonic_frozen_g1core_lora_v2.onnx` | **frozen-G1core + LoRA transfer (phase-3 8900)** | beats the incumbent OOD (69.0 vs 59.0 PHUMA); `.phi.json` sidecar = codec calibration record |
 
+**The play scripts now default to the transfer model (v2)** with its
+correct runtime config; set `MODEL=models/x2_sonic_14000_g1.onnx` to
+run the incumbent (which auto-uses its bigrun tuning preset).
+
 Run the transfer model directly:
 
 ```bash
