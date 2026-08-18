@@ -101,3 +101,15 @@ Paper + comparisons: https://sonic-agibot-x2.github.io/sonic-transfer/
 NOTE: the default bigrun tuning preset is incumbent-specific (its
 deviation clamps destabilize other models) — v2 runs with parity
 gains + action clip + frozen wrists, as evaluated.
+
+## Motion data attribution
+
+All motion clips in this repository (reference motions, demo dances,
+walks, and derived files) originate from the **BONES-SEED** motion-capture
+dataset by **Bones Studio**, publicly released alongside NVIDIA GEAR-SONIC
+(retargeted here to this robot). Their use is governed by the
+**BONES-SEED license** — obtain the dataset and its license terms from
+the official release (Hugging Face: BONES-SEED, Bones Studio) before
+redistributing or using these motions beyond what that license permits.
+This repo redistributes only retargeted derivatives for research/demo
+reproduction of the accompanying reports.
