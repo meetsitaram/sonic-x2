@@ -1,0 +1,67 @@
+# frozen_g1.yaml -- deploy tuning for the FROZEN-G1CORE transfer model
+# (any2any v2 / phase-3 8900; HF x2_sonic_frozen_g1core_lora_v2.onnx).
+#
+# WHY A SEPARATE PRESET (2026-08-18, wobbly-dance investigation):
+# bigrun.yaml's waist_pr overrides (kp x2.00, kd x5.51) are the MASK for
+# the incumbent's disease -- trained at 32 Nm, saturating at the
+# hardware's 24, it needs stiffening+damping to stay quiet. v2 trained
+# at the HONEST 24 Nm: doubling kp on top of its correct requests
+# overdrives the waist into the very saturation it trained to avoid ->
+# dance wobble. Measured demand (sim, 3 dances): waist_pitch exceeds the
+# 0.45 dev clamp on ~60-70% of steps for BOTH models -- the clamp pins
+# dances for everyone; the GAIN overrides are the v2-specific suspect.
+#
+# CHANGES vs bigrun.yaml (incumbent-mask removal, sim-iterated):
+#   kp_scale_waist_pr:    2.00 -> 1.00   (training-parity stiffness)
+#   kd_scale_waist_pr:    5.51 -> 1.00   (training-parity damping)
+#   kd_scale_waist_yaw:   1.50 -> 1.00
+#   max_target_dev_waist: 0.45 -> 0.70   (v2 is 24 Nm-honest by training;
+#       the >0.45-unsafe argument was the INCUMBENT's 32-vs-24 mismatch
+#       and does not apply. bigrun_wide precedent used 0.80; 0.70 is the
+#       cautious first rung -- widen further only after clean hardware.)
+#   kd_scale_knee:        0.792 -> 1.00  \ waist-only change left gangam
+#   kd_scale_hip:         0.476 -> 1.00  / sagging (pelvis 0.391 @6.1s);
+#       restoring leg damping to parity fixed it -- these cuts were also
+#       sized against the incumbent.
+# Kept from bigrun: action_clip 20 slam armor, deploy wrist freeze, arm
+# freedom (LPF 0 / dev 2.0), ankle kp/kd scales, leg dev 0.70 + 16 Hz LPF.
+# SIM RESULTS (v2, quick-play, 2026-08-18): gangam/disco/freedom/walk all
+# motion_end, MAE 0.13-0.19 rad, pelvis-z MAE <= 0.033 m. The waist-only
+# variant (leg kd kept at bigrun) FAILED gangam -- do not resurrect it.
+#
+# HARDWARE TEST ORDER (ladder discipline, do not skip):
+#   static chest-nudge (5-7 Hz ankle ring?) -> idle stand (waist
+#   wobble?) -> in-place turns -> ONE dance -> boxing. Anything
+#   rings/wobbles -> fall back to bigrun.yaml and report.
+# Select via X2_RITUAL_TUNING=frozen_g1 (kplanner_profile.env).
+# SIM-VERIFIED (quick-play, 3 dances, see any2any ledger 2026-08-18).
+
+description: |
+  Frozen-G1core v2 preset: bigrun minus the incumbent's waist saturation
+  mask (waist gains to parity, waist dev widened to 0.70). For the
+  24 Nm-honest transfer model ONLY -- do not use with the incumbent.
+
+action_clip:    20.0
+max_target_dev:        0.30
+max_target_dev_leg:    0.70
+max_target_dev_waist:  0.70
+max_target_dev_arm:    2.00
+max_target_dev_head:   0.50
+ramp_seconds:    2.0
+return_seconds:  2.0
+tilt_cos:       -0.3
+target_lpf_hz:        8.0
+target_lpf_hz_leg:    16.0
+target_lpf_hz_waist:  0.0
+target_lpf_hz_arm:    0.0
+kp_scale_ankle_pitch: 1.40
+kp_scale_ankle_roll:  1.15
+kp_scale_knee:        1.20
+kp_scale_waist_yaw:   1.00
+kp_scale_waist_pr:    1.00
+kd_scale_ankle_pitch: 2.00
+kd_scale_ankle_roll:  1.50
+kd_scale_knee:        1.00
+kd_scale_hip:         1.00
+kd_scale_waist_yaw:   1.00
+kd_scale_waist_pr:    1.00
